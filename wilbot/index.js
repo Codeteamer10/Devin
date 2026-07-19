@@ -10,7 +10,8 @@ const {
 const puppeteer = require('puppeteer');
 
 const API_BASE_URL = 'https://opencode.ai/zen/v1';
-const MODEL = 'deepseek-v4-flash-free';
+const MODEL = process.env.MODEL || 'deepseek-v4-flash-free';
+const ULTRA_THINKING = process.env.ULTRA_THINKING !== 'false';
 const MAX_HISTORY_MESSAGES = 10;
 const MAX_REPLY_LENGTH = 2000;
 
@@ -91,7 +92,7 @@ function extractCodeBlocks(text) {
       const languageTag = language.trim().split(/\s+/)[0];
       const safeLanguage = languageTag.replace(/[^a-z0-9_-]/gi, '_');
       const filename = safeLanguage
-        ? `code-${blocks.length + 1}.${safeLanguage}.txt`
+        ? `code-${blocks.length + 1}-${safeLanguage}.txt`
         : `code-${blocks.length + 1}.txt`;
       blocks.push({ content, filename });
       return `(see attached ${filename})`;
@@ -148,18 +149,25 @@ async function renderHtml(html) {
 }
 
 async function createCompletion(messages) {
+  const body = {
+    model: MODEL,
+    messages,
+    temperature: 0.7,
+    max_tokens: 1000,
+  };
+
+  if (ULTRA_THINKING) {
+    body.reasoning_effort = 'max';
+    body.thinking = { type: 'enabled' };
+  }
+
   const response = await fetch(`${API_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${OPENCODE_ZEN_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: MODEL,
-      messages,
-      temperature: 0.7,
-      max_tokens: 1000,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -168,11 +176,12 @@ async function createCompletion(messages) {
   }
 
   const result = await response.json();
-  const content = result.choices?.[0]?.message?.content;
+  const message = result.choices?.[0]?.message;
+  const content = message?.content;
   if (!content) {
     throw new Error('OpenCode Zen returned no message content');
   }
-  return content;
+  return { content, reasoning: message?.reasoning_content };
 }
 
 client.once(Events.ClientReady, (readyClient) => {
@@ -213,7 +222,7 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     await message.channel.sendTyping();
     const response = await createCompletion(messages);
-    const html = extractHtml(response);
+    const html = extractHtml(response.content);
     let preview;
     if (html) {
       try {
@@ -222,7 +231,7 @@ client.on(Events.MessageCreate, async (message) => {
         console.error('Failed to render HTML preview:', error.message);
       }
     }
-    const code = extractCodeBlocks(response);
+    const code = extractCodeBlocks(response.content);
     const files = code.blocks.map(
       ({ content, filename }) =>
         new AttachmentBuilder(Buffer.from(content, 'utf8'), { name: filename }),
@@ -233,7 +242,11 @@ client.on(Events.MessageCreate, async (message) => {
       );
     }
 
-    history.push(userMessage, { role: 'assistant', content: response });
+    const assistantMessage = { role: 'assistant', content: response.content };
+    if (response.reasoning) {
+      assistantMessage.reasoning_content = response.reasoning;
+    }
+    history.push(userMessage, assistantMessage);
     while (history.length > MAX_HISTORY_MESSAGES) {
       history.shift();
     }

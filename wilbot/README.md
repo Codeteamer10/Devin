@@ -18,7 +18,7 @@ OpenCode Zen OpenAI-compatible API.
    npm install
    ```
 
-2. Copy `.env.example` to `.env` and fill in both values:
+2. Copy `.env.example` to `.env` and fill in the values:
 
    ```powershell
    Copy-Item .env.example .env
@@ -26,6 +26,10 @@ OpenCode Zen OpenAI-compatible API.
 
    The bot requires the `Message Content Intent` in the Discord Developer
    Portal. Enable it under the bot's settings before inviting the bot.
+
+   `ULTRA_THINKING` defaults to `true`, which enables DeepSeek V4's reasoning
+   mode (`reasoning_effort: max` and `thinking: enabled`). Set it to `false`
+   to disable reasoning. You can also override the model with `MODEL`.
 
 3. Start Wilbot:
 
