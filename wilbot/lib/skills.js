@@ -2,6 +2,8 @@ const fs = require('fs').promises;
 const path = require('path');
 
 const SKILLS_DIR = process.env.SKILLS_DIR || './skills';
+const DATA_DIR = process.env.DATA_DIR || './data';
+const DATA_SKILLS_DIR = process.env.DATA_SKILLS_DIR || path.join(DATA_DIR, 'skills');
 const DEFAULT_PROMPT = 'You are Wilbot, a helpful and concise Discord assistant. Keep replies short and conversational.';
 
 function parseFrontmatter(text) {
@@ -24,38 +26,52 @@ async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true }).catch(() => {});
 }
 
-async function loadSkills() {
-  const skills = {};
-  await ensureDir(SKILLS_DIR);
-  const files = await fs.readdir(SKILLS_DIR).catch(() => []);
+async function readSkillFile(filePath) {
+  const text = await fs.readFile(filePath, 'utf8').catch(() => '');
+  if (!text) return null;
+  const { metadata, content } = parseFrontmatter(text);
+  const name = path.basename(filePath, '.md');
+  return {
+    name,
+    description: metadata.description || name,
+    content,
+  };
+}
+
+async function readSkillsFromDir(dir) {
+  const result = {};
+  const files = await fs.readdir(dir).catch(() => []);
   for (const file of files) {
     if (!file.endsWith('.md')) continue;
-    const name = path.basename(file, '.md');
-    const text = await fs.readFile(path.join(SKILLS_DIR, file), 'utf8').catch(() => '');
-    const { metadata, content } = parseFrontmatter(text);
-    skills[name] = {
-      name,
-      description: metadata.description || name,
-      content,
-    };
+    const skill = await readSkillFile(path.join(dir, file));
+    if (skill) result[skill.name] = skill;
   }
-  if (!skills.default) {
-    skills.default = {
+  return result;
+}
+
+async function loadSkills() {
+  const builtIn = await readSkillsFromDir(SKILLS_DIR);
+  await ensureDir(DATA_SKILLS_DIR);
+  const learned = await readSkillsFromDir(DATA_SKILLS_DIR);
+  const merged = { ...builtIn, ...learned };
+  if (!merged.default) {
+    merged.default = {
       name: 'default',
       description: 'Default Wilbot assistant',
       content: DEFAULT_PROMPT,
     };
   }
-  return skills;
+  return merged;
 }
 
 async function saveSkill(name, markdown) {
-  await ensureDir(SKILLS_DIR);
-  await fs.writeFile(path.join(SKILLS_DIR, `${name}.md`), markdown, 'utf8');
+  await ensureDir(DATA_SKILLS_DIR);
+  await fs.writeFile(path.join(DATA_SKILLS_DIR, `${name}.md`), markdown, 'utf8');
 }
 
 async function appendAdaptiveNote(note) {
-  const file = path.join(SKILLS_DIR, 'adaptive.md');
+  await ensureDir(DATA_SKILLS_DIR);
+  const file = path.join(DATA_SKILLS_DIR, 'adaptive.md');
   const existing = await fs.readFile(file, 'utf8').catch(() => '');
   const { metadata, content } = parseFrontmatter(existing);
   const newContent = content ? `${content}\n- ${note}` : `- ${note}`;

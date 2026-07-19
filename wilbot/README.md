@@ -56,7 +56,7 @@ skills with a command:
 - `/export` — get a `wilbot-training-data.json` file with conversations and feedback
 
 React with `👍` or `👎` on any of Wilbot's replies to record feedback. Negative
-feedback is appended to `skills/adaptive.md` and included in future system prompts.
+feedback is appended to `data/skills/adaptive.md` and included in future system prompts.
 The conversation/feedback dataset can be used for supervised fine-tuning or DPO.
 
 ## Usage
@@ -77,6 +77,5 @@ fly deploy
 ```
 
 The included `fly.toml` mounts a Fly volume at `/app/data` so conversation
-history, feedback, and learned skills persist across deploys. The `skills/`
-folder is baked into the Docker image; use `/learn` to generate new skills at
-runtime.
+history, feedback, and learned skills in `data/skills/` persist across deploys.
+The `skills/` folder is baked into the Docker image as the built-in skill catalog.
