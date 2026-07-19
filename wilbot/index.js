@@ -8,6 +8,8 @@ const {
   Partials,
 } = require('discord.js');
 const puppeteer = require('puppeteer');
+const skills = require('./lib/skills');
+const learning = require('./lib/learning');
 
 const API_BASE_URL = 'https://opencode.ai/zen/v1';
 const MODEL = process.env.MODEL || 'deepseek-v4-flash-free';
@@ -27,17 +29,31 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.DirectMessageReactions,
   ],
-  partials: [Partials.Channel],
+  partials: [
+    Partials.Channel,
+    Partials.Message,
+    Partials.Reaction,
+    Partials.User,
+  ],
 });
 
+let loadedSkills = {};
 const channelHistories = new Map();
+const activeSkills = new Map();
+const messageLog = new Map();
 
 function getHistory(channelId) {
   if (!channelHistories.has(channelId)) {
     channelHistories.set(channelId, []);
   }
   return channelHistories.get(channelId);
+}
+
+function getActiveSkill(channelId) {
+  return activeSkills.get(channelId) || 'default';
 }
 
 function splitMessage(text) {
@@ -184,6 +200,127 @@ async function createCompletion(messages) {
   return { content, reasoning: message?.reasoning_content };
 }
 
+function parseCommand(text) {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(?:!|\/)(\w+)(?:\s+(.*))?$/s);
+  if (!match) return null;
+  return { command: match[1].toLowerCase(), args: (match[2] || '').trim() };
+}
+
+async function handleCommand(message, prompt) {
+  const command = parseCommand(prompt);
+  if (!command) return false;
+
+  if (command.command === 'skills') {
+    const list = Object.values(loadedSkills)
+      .map((s) => `- **${s.name}**: ${s.description}`)
+      .join('\n');
+    await message.reply(`Available skills:\n${list || 'No skills loaded.'}`);
+    return true;
+  }
+
+  if (command.command === 'skill') {
+    const name = command.args || 'default';
+    if (!loadedSkills[name]) {
+      await message.reply(`Unknown skill: ${name}. Use \`/skills\` to list.`);
+      return true;
+    }
+    activeSkills.set(message.channelId, name);
+    await message.reply(`Active skill set to **${name}**.`);
+    return true;
+  }
+
+  if (command.command === 'learn') {
+    const name = command.args || 'adaptive';
+    await message.channel.sendTyping();
+    const conversations = await learning.readConversations(message.channelId, 20);
+    const feedback = await learning.readFeedback(message.channelId);
+    const transcript = conversations
+      .map((c) => `User: ${c.userPrompt}\nAssistant: ${c.assistantResponse}`)
+      .join('\n\n');
+    const feedbackText = feedback
+      .map((f) => `- ${f.rating}: ${f.assistantResponse.slice(0, 200)}`)
+      .join('\n');
+
+    const messages = [
+      {
+        role: 'system',
+        content:
+          'You are a skill author. Write a reusable Discord bot skill in markdown with YAML frontmatter (name, description). Keep instructions concise.',
+      },
+      {
+        role: 'user',
+        content: `Create a skill named "${name}" from this conversation transcript and feedback.\n\nTranscript:\n${transcript}\n\nFeedback:\n${feedbackText}`,
+      },
+    ];
+
+    try {
+      const skillResponse = await createCompletion(messages);
+      const markdown = skillResponse.content;
+      await skills.saveSkill(name, markdown);
+      loadedSkills = await skills.loadSkills();
+      activeSkills.set(message.channelId, name);
+      await message.reply(`Learned skill **${name}** and activated it.`);
+    } catch (error) {
+      console.error('Failed to learn skill:', error.message);
+      await message.reply('Failed to learn a skill from this conversation.');
+    }
+    return true;
+  }
+
+  if (command.command === 'export') {
+    try {
+      const data = await learning.exportDataset();
+      const attachment = new AttachmentBuilder(Buffer.from(data, 'utf8'), {
+        name: 'wilbot-training-data.json',
+      });
+      await message.reply({
+        content: 'Here is the collected conversation and feedback dataset.',
+        files: [attachment],
+      });
+    } catch (error) {
+      console.error('Failed to export data:', error.message);
+      await message.reply('Failed to export training data.');
+    }
+    return true;
+  }
+
+  return false;
+}
+
+async function sendReply(message, response) {
+  const html = extractHtml(response.content);
+  let preview;
+  if (html) {
+    try {
+      preview = await renderHtml(html);
+    } catch (error) {
+      console.error('Failed to render HTML preview:', error.message);
+    }
+  }
+
+  const code = extractCodeBlocks(response.content);
+  const files = code.blocks.map(
+    ({ content, filename }) =>
+      new AttachmentBuilder(Buffer.from(content, 'utf8'), { name: filename }),
+  );
+  if (preview) {
+    files.unshift(
+      new AttachmentBuilder(preview, { name: 'wilbot-html-preview.png' }),
+    );
+  }
+
+  const replies = [];
+  for (const [index, chunk] of splitMessage(code.messageText).entries()) {
+    const reply = { content: chunk };
+    if (index === 0 && files.length > 0) {
+      reply.files = files;
+    }
+    replies.push(await message.reply(reply));
+  }
+  return replies[0];
+}
+
 client.once(Events.ClientReady, (readyClient) => {
   console.log(`Logged in to Discord as ${readyClient.user.tag}`);
 });
@@ -199,7 +336,7 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
-  const prompt = message.content
+  let prompt = message.content
     .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
     .trim();
   if (!prompt) {
@@ -207,14 +344,15 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
+  if (await handleCommand(message, prompt)) {
+    return;
+  }
+
   const history = getHistory(message.channelId);
   const userMessage = { role: 'user', content: prompt };
+  const systemContent = skills.buildSystemPrompt(loadedSkills, getActiveSkill(message.channelId));
   const messages = [
-    {
-      role: 'system',
-      content:
-        'You are Wilbot, a helpful and concise Discord assistant. Keep replies short and conversational.',
-    },
+    { role: 'system', content: systemContent },
     ...history,
     userMessage,
   ];
@@ -222,25 +360,6 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     await message.channel.sendTyping();
     const response = await createCompletion(messages);
-    const html = extractHtml(response.content);
-    let preview;
-    if (html) {
-      try {
-        preview = await renderHtml(html);
-      } catch (error) {
-        console.error('Failed to render HTML preview:', error.message);
-      }
-    }
-    const code = extractCodeBlocks(response.content);
-    const files = code.blocks.map(
-      ({ content, filename }) =>
-        new AttachmentBuilder(Buffer.from(content, 'utf8'), { name: filename }),
-    );
-    if (preview) {
-      files.unshift(
-        new AttachmentBuilder(preview, { name: 'wilbot-html-preview.png' }),
-      );
-    }
 
     const assistantMessage = { role: 'assistant', content: response.content };
     if (response.reasoning) {
@@ -251,24 +370,89 @@ client.on(Events.MessageCreate, async (message) => {
       history.shift();
     }
 
-    for (const [index, chunk] of splitMessage(code.messageText).entries()) {
-      const reply = { content: chunk };
-      if (index === 0 && files.length > 0) {
-        reply.files = files;
-      }
-      await message.reply(reply);
-    }
+    const replyMessage = await sendReply(message, response);
+
+    messageLog.set(replyMessage.id, {
+      channelId: message.channelId,
+      userId: message.author.id,
+      userPrompt: prompt,
+      assistantResponse: response.content,
+      skill: getActiveSkill(message.channelId),
+      timestamp: new Date().toISOString(),
+    });
+
+    await learning.appendConversation({
+      channelId: message.channelId,
+      userId: message.author.id,
+      userPrompt: prompt,
+      assistantResponse: response.content,
+      skill: getActiveSkill(message.channelId),
+      model: MODEL,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     console.error('Failed to respond to message:', error.message);
     await message.reply('Sorry, I could not reach the AI service right now.');
   }
 });
 
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (user.bot || !messageLog.has(reaction.message.id)) {
+    return;
+  }
+
+  if (reaction.partial) {
+    try {
+      await reaction.fetch();
+    } catch (error) {
+      console.error('Failed to fetch reaction:', error.message);
+      return;
+    }
+  }
+
+  const logEntry = messageLog.get(reaction.message.id);
+  const emoji = reaction.emoji.name;
+  let rating;
+  if (emoji === '👍') rating = 'up';
+  else if (emoji === '👎') rating = 'down';
+  else return;
+
+  await learning.appendFeedback({
+    messageId: reaction.message.id,
+    channelId: logEntry.channelId,
+    userId: user.id,
+    userPrompt: logEntry.userPrompt,
+    assistantResponse: logEntry.assistantResponse,
+    rating,
+    skill: logEntry.skill,
+    timestamp: new Date().toISOString(),
+  });
+
+  if (rating === 'down') {
+    await skills.appendAdaptiveNote(
+      `User disliked this response to "${logEntry.userPrompt.slice(0, 100)}": "${logEntry.assistantResponse.slice(0, 200)}". Avoid similar responses in the future.`,
+    );
+    loadedSkills = await skills.loadSkills();
+  }
+});
+
+async function main() {
+  loadedSkills = await skills.loadSkills();
+  await client.login(DISCORD_TOKEN);
+}
+
 if (require.main === module) {
-  client.login(DISCORD_TOKEN).catch((error) => {
-    console.error('Failed to log in to Discord:', error.message);
+  main().catch((error) => {
+    console.error('Failed to start Wilbot:', error.message);
     process.exitCode = 1;
   });
 }
 
-module.exports = { extractCodeBlocks, extractHtml, renderHtml, splitMessage };
+module.exports = {
+  extractCodeBlocks,
+  extractHtml,
+  renderHtml,
+  splitMessage,
+  createCompletion,
+  parseCommand,
+};

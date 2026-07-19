@@ -40,10 +40,24 @@ OpenCode Zen OpenAI-compatible API.
 Wilbot uses the `deepseek-v4-flash-free` model at
 `https://opencode.ai/zen/v1`. It keeps the latest five exchanges per channel,
 shows a typing indicator while generating, and splits long responses to fit
-Discord's 2,000-character message limit. When a response includes HTML in an
+Discord's 2,000-character limit. When a response includes HTML in an
 `html` fenced code block (or is a complete HTML document), Wilbot also attaches
 a PNG preview rendered with Puppeteer. All fenced code blocks are also sent as
 `.txt` file attachments instead of remaining inline in the message.
+
+## Skills & adaptation
+
+Wilbot supports Hermes-style markdown skills in the `skills/` folder. Switch
+skills with a command:
+
+- `/skills` — list available skills
+- `/skill coder` — switch to the `coder` skill/persona
+- `/learn my-skill` — generate a new skill from the recent conversation
+- `/export` — get a `wilbot-training-data.json` file with conversations and feedback
+
+React with `👍` or `👎` on any of Wilbot's replies to record feedback. Negative
+feedback is appended to `skills/adaptive.md` and included in future system prompts.
+The conversation/feedback dataset can be used for supervised fine-tuning or DPO.
 
 ## Usage
 
@@ -62,6 +76,7 @@ fly secrets set DISCORD_TOKEN=... OPENCODE_ZEN_API_KEY=...
 fly deploy
 ```
 
-The included `fly.toml` uses the Dockerfile and starts the bot as a long-running
-process. Do not add an HTTP service or enable automatic machine stopping for
-this worker.
+The included `fly.toml` mounts a Fly volume at `/app/data` so conversation
+history, feedback, and learned skills persist across deploys. The `skills/`
+folder is baked into the Docker image; use `/learn` to generate new skills at
+runtime.

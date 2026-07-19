@@ -9,3 +9,7 @@ kill_timeout = "30s"
 
 [processes]
   app = "node index.js"
+
+[mounts]
+  source = "wilbot_data"
+  destination = "/app/data"
