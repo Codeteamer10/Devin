@@ -42,3 +42,19 @@ Discord's 2,000-character message limit.
 
 - Mention the bot in a server channel: `@Wilbot What is a closure?`
 - Send the bot a direct message.
+
+## Fly.io deployment
+
+Wilbot runs as a worker process and does not expose an HTTP service. Install and
+authenticate the [Fly CLI](https://fly.io/docs/flyctl/install/) first, then run
+these commands from the `wilbot` directory:
+
+```powershell
+fly launch --no-deploy
+fly secrets set DISCORD_TOKEN=... OPENCODE_ZEN_API_KEY=...
+fly deploy
+```
+
+The included `fly.toml` uses the Dockerfile and starts the bot as a long-running
+process. Do not add an HTTP service or enable automatic machine stopping for
+this worker.
