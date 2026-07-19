@@ -1,0 +1,16 @@
+{
+  "name": "wilbot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "An AI-powered Discord bot using OpenCode Zen.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.21.0",
+    "dotenv": "^17.2.0",
+    "puppeteer": "^24.15.0"
+  }
+}
