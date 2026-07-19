@@ -36,7 +36,9 @@ OpenCode Zen OpenAI-compatible API.
 Wilbot uses the `deepseek-v4-flash-free` model at
 `https://opencode.ai/zen/v1`. It keeps the latest five exchanges per channel,
 shows a typing indicator while generating, and splits long responses to fit
-Discord's 2,000-character message limit.
+Discord's 2,000-character message limit. When a response includes HTML in an
+`html` fenced code block (or is a complete HTML document), Wilbot also attaches
+a PNG preview rendered with Puppeteer.
 
 ## Usage
 

@@ -1,11 +1,13 @@
 require('dotenv').config();
 
 const {
+  AttachmentBuilder,
   Client,
   Events,
   GatewayIntentBits,
   Partials,
 } = require('discord.js');
+const puppeteer = require('puppeteer');
 
 const API_BASE_URL = 'https://opencode.ai/zen/v1';
 const MODEL = 'deepseek-v4-flash-free';
@@ -57,6 +59,62 @@ function splitMessage(text) {
     chunks.push(remaining);
   }
   return chunks;
+}
+
+function extractHtml(text) {
+  const blocks = [];
+  const fencedHtml = /```html\s*([\s\S]*?)```/gi;
+  let match;
+
+  while ((match = fencedHtml.exec(text)) !== null) {
+    if (match[1].trim()) {
+      blocks.push(match[1].trim());
+    }
+  }
+
+  if (blocks.length > 0) {
+    return blocks.join('\n');
+  }
+
+  const trimmed = text.trim();
+  if (/^<!doctype\s+html\b/i.test(trimmed) || /^<html(?:\s|>)/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return null;
+}
+
+async function renderHtml(html) {
+  const launchOptions = {};
+  if (process.platform === 'linux') {
+    launchOptions.args = ['--no-sandbox', '--disable-setuid-sandbox'];
+  }
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  const browser = await puppeteer.launch(launchOptions);
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15000 });
+
+    const contentHeight = await page.evaluate(() =>
+      Math.max(
+        document.body?.scrollHeight || 0,
+        document.documentElement?.scrollHeight || 0,
+        800,
+      ),
+    );
+    const height = Math.min(contentHeight, 4000);
+    const screenshot = await page.screenshot({
+      type: 'png',
+      clip: { x: 0, y: 0, width: 1280, height },
+    });
+    return screenshot;
+  } finally {
+    await browser.close();
+  }
 }
 
 async function createCompletion(messages) {
@@ -125,13 +183,29 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     await message.channel.sendTyping();
     const response = await createCompletion(messages);
+    const html = extractHtml(response);
+    let preview;
+    if (html) {
+      try {
+        preview = await renderHtml(html);
+      } catch (error) {
+        console.error('Failed to render HTML preview:', error.message);
+      }
+    }
+
     history.push(userMessage, { role: 'assistant', content: response });
     while (history.length > MAX_HISTORY_MESSAGES) {
       history.shift();
     }
 
-    for (const chunk of splitMessage(response)) {
-      await message.reply(chunk);
+    for (const [index, chunk] of splitMessage(response).entries()) {
+      const reply = { content: chunk };
+      if (index === 0 && preview) {
+        reply.files = [
+          new AttachmentBuilder(preview, { name: 'wilbot-html-preview.png' }),
+        ];
+      }
+      await message.reply(reply);
     }
   } catch (error) {
     console.error('Failed to respond to message:', error.message);
@@ -139,9 +213,11 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
-client.login(DISCORD_TOKEN).catch((error) => {
-  console.error('Failed to log in to Discord:', error.message);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  client.login(DISCORD_TOKEN).catch((error) => {
+    console.error('Failed to log in to Discord:', error.message);
+    process.exitCode = 1;
+  });
+}
 
-module.exports = { splitMessage };
+module.exports = { extractHtml, renderHtml, splitMessage };
