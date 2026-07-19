@@ -84,6 +84,36 @@ function extractHtml(text) {
   return null;
 }
 
+function extractCodeBlocks(text) {
+  const blocks = [];
+  let messageText = text
+    .replace(/```([^\r\n`]*)\r?\n([\s\S]*?)```/g, (match, language, content) => {
+      const languageTag = language.trim().split(/\s+/)[0];
+      const safeLanguage = languageTag.replace(/[^a-z0-9_-]/gi, '_');
+      const filename = safeLanguage
+        ? `code-${blocks.length + 1}.${safeLanguage}.txt`
+        : `code-${blocks.length + 1}.txt`;
+      blocks.push({ content, filename });
+      return `(see attached ${filename})`;
+    })
+    .trim();
+
+  const bareHtml = text.trim();
+  if (
+    blocks.length === 0 &&
+    (/^<!doctype\s+html\b/i.test(bareHtml) || /^<html(?:\s|>)/i.test(bareHtml))
+  ) {
+    const filename = 'code-1.html.txt';
+    blocks.push({ content: bareHtml, filename });
+    messageText = `(see attached ${filename})`;
+  }
+
+  return {
+    blocks,
+    messageText: messageText || "Here's the code:",
+  };
+}
+
 async function renderHtml(html) {
   const launchOptions = {};
   if (process.platform === 'linux') {
@@ -192,18 +222,26 @@ client.on(Events.MessageCreate, async (message) => {
         console.error('Failed to render HTML preview:', error.message);
       }
     }
+    const code = extractCodeBlocks(response);
+    const files = code.blocks.map(
+      ({ content, filename }) =>
+        new AttachmentBuilder(Buffer.from(content, 'utf8'), { name: filename }),
+    );
+    if (preview) {
+      files.unshift(
+        new AttachmentBuilder(preview, { name: 'wilbot-html-preview.png' }),
+      );
+    }
 
     history.push(userMessage, { role: 'assistant', content: response });
     while (history.length > MAX_HISTORY_MESSAGES) {
       history.shift();
     }
 
-    for (const [index, chunk] of splitMessage(response).entries()) {
+    for (const [index, chunk] of splitMessage(code.messageText).entries()) {
       const reply = { content: chunk };
-      if (index === 0 && preview) {
-        reply.files = [
-          new AttachmentBuilder(preview, { name: 'wilbot-html-preview.png' }),
-        ];
+      if (index === 0 && files.length > 0) {
+        reply.files = files;
       }
       await message.reply(reply);
     }
@@ -220,4 +258,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { extractHtml, renderHtml, splitMessage };
+module.exports = { extractCodeBlocks, extractHtml, renderHtml, splitMessage };

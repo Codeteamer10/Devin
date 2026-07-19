@@ -38,7 +38,8 @@ Wilbot uses the `deepseek-v4-flash-free` model at
 shows a typing indicator while generating, and splits long responses to fit
 Discord's 2,000-character message limit. When a response includes HTML in an
 `html` fenced code block (or is a complete HTML document), Wilbot also attaches
-a PNG preview rendered with Puppeteer.
+a PNG preview rendered with Puppeteer. All fenced code blocks are also sent as
+`.txt` file attachments instead of remaining inline in the message.
 
 ## Usage
 
